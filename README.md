@@ -226,6 +226,15 @@ signature, _ := protocol.SignMessage(query, privateKey)
 
 ---
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [SPEC.md](./SPEC.md) | Full protocol specification |
+| [WHY.md](./WHY.md) | Strategic rationale and market opportunity |
+| [QUICKSTART.md](./QUICKSTART.md) | 5-minute integration guide |
+| [MCP.md](./MCP.md) | How MFQP works with Anthropic's MCP |
+
 ## Specification
 
 See [SPEC.md](./SPEC.md) for the complete protocol specification:
