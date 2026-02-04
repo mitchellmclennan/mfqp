@@ -45,7 +45,11 @@ MFQP is the same model for AI queries:
 
 ## Why Intent-Only Queries?
 
-Traditional APIs expose what you're looking for:
+### The Information Asymmetry Problem
+
+In B2B relationships, **information is leverage**. The more your partner knows about your situation, the less negotiating power you have.
+
+Traditional APIs expose everything:
 
 ```
 GET /api/inventory?sku=TITANIUM-ALLOY-5000&quantity=50000
@@ -58,21 +62,96 @@ This tells the supplier:
 
 **That's valuable competitive intelligence you just gave away for free.**
 
-### Ghost Queries
+### A Concrete Example: The Desperate Buyer
 
-MFQP uses "Ghost Queries" — you send the **intent**, not the raw query:
+**Scenario:** Boeing's AI needs to check GE's engine availability.
+
+**❌ Raw Query Approach:**
+
+```
+"We need 500 LEAP-1B engines for the 737 MAX production ramp-up in Q3. 
+Our current supplier Safran is 6 weeks behind schedule. What's your capacity and pricing?"
+```
+
+**What GE learns:**
+| Intelligence | Value to GE |
+|-------------|-------------|
+| Boeing is scaling 737 MAX | Product roadmap intel |
+| They need 500 units | Exact demand forecast |
+| Safran is behind schedule | Competitor weakness |
+| They're asking about capacity | They're desperate |
+| Q3 timeline | Deadline pressure |
+
+**Result:** GE now knows Boeing has no negotiating leverage. They can raise prices 15–20% and Boeing has to accept.
+
+---
+
+**✅ Ghost Query Approach (MFQP):**
 
 ```json
 {
-  "intent": "What materials have lead time under 30 days?",
-  "intent_class": "inventory.lead_time"
+  "intent": "What is current production capacity for commercial aviation engines?",
+  "intent_class": "inventory.capacity_check"
 }
 ```
 
-The responder knows you want lead time info. They don't know:
-- Which specific materials
-- How much quantity
-- Why you need it
+**What GE learns:**
+| Intelligence | Value to GE |
+|-------------|-------------|
+| Boeing is checking capacity | Generic interest signal |
+| ...that's it | — |
+
+**GE responds:**
+```json
+{
+  "content": "Current LEAP-1B capacity: 650 units/quarter. Lead time: 45 days.",
+  "attestation": { "signature": "..." }
+}
+```
+
+**Result:** Boeing gets actionable data. GE doesn't know:
+- Why Boeing is asking
+- How urgent the need is
+- What happened with Safran
+- Boeing's exact quantity requirements
+
+**Boeing preserves negotiating leverage.**
+
+---
+
+### Intent Classification Categories
+
+MFQP uses standardized intent classes that reveal *purpose* without exposing *specifics*:
+
+| Intent Class | What Responder Sees | What Responder Doesn't See |
+|-------------|---------------------|---------------------------|
+| `inventory.availability` | "Checking stock levels" | Which SKUs, quantities, urgency |
+| `pricing.quote_request` | "Requesting pricing" | Budget, competing quotes, deadline |
+| `logistics.lead_time` | "Checking delivery times" | Production schedule, dependencies |
+| `financial.credit_check` | "Assessing creditworthiness" | Deal size, terms, alternatives |
+| `legal.compliance_query` | "Compliance question" | Specific regulation, exposure risk |
+
+The responder's AI matches the intent class to their data policies and returns appropriate information—without knowing the sensitive context.
+
+---
+
+### Real-World Use Cases
+
+| Scenario | Raw Query Exposes | Ghost Query Protects |
+|----------|-------------------|---------------------|
+| **Supply chain check** | Urgency, volumes, competitor issues | Just "capacity inquiry" |
+| **M&A due diligence** | Acquisition target identity | Just "financial health query" |
+| **Competitive intelligence** | Exactly what you're building | Just "market sizing request" |
+| **Legal discovery** | Creates detailed liability trail | Minimal exposure |
+| **Pricing negotiation** | Your budget and alternatives | Just "quote request" |
+
+---
+
+### The Bottom Line
+
+Ghost Queries aren't just about privacy—they're about **preserving negotiating leverage** in adversarial business relationships.
+
+Your AI gets the answers it needs. Your partners don't learn why you're asking.
 
 **Your query is a ghost. It reveals purpose, not content.**
 
