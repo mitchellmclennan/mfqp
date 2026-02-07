@@ -4,13 +4,13 @@
  * Metalogue Federated Query Protocol v1.0
  *
  * Features:
- * - Runtime validation with Zod schemas
+ * - Comprehensive runtime validation
  * - Comprehensive error handling
  * - Size limits and sanitization
  * - Timestamp validation (anti-replay)
  *
  * Requirements:
- *   npm install @noble/ed25519 zod
+ *   npm install @noble/ed25519
  *
  * Usage:
  *   import { GhostQuery, signMessage, verifySignature } from './mfqp';
@@ -313,6 +313,14 @@ export class GhostQuery {
     }
 
     static fromDict(data: GhostQueryData, skipReplayCheck: boolean = false): GhostQuery {
+        // Validate protocol version
+        if (data.mfqp_version && !data.mfqp_version.startsWith('1.')) {
+            throw new ValidationError(
+                `unsupported MFQP version: ${data.mfqp_version} (supported: 1.x)`,
+                'mfqp_version'
+            );
+        }
+
         const query = new GhostQuery({
             queryId: data.query_id,
             sourceCompany: data.source_company,
@@ -490,9 +498,25 @@ export class QueryResponse {
         if (this.redactions.length > MAX_REDACTED_FIELDS) {
             throw new ValidationError(`exceeds max of ${MAX_REDACTED_FIELDS} fields`, 'redactions');
         }
+
+        // Validate payload size
+        if (this.payload !== null) {
+            const payloadJson = JSON.stringify(this.payload);
+            if (new TextEncoder().encode(payloadJson).length > MAX_PAYLOAD_SIZE_BYTES) {
+                throw new MFQPError('payload exceeds maximum size', 'E008');
+            }
+        }
     }
 
     static fromDict(data: QueryResponseData): QueryResponse {
+        // Validate protocol version
+        if (data.mfqp_version && !data.mfqp_version.startsWith('1.')) {
+            throw new ValidationError(
+                `unsupported MFQP version: ${data.mfqp_version} (supported: 1.x)`,
+                'mfqp_version'
+            );
+        }
+
         return new QueryResponse({
             queryId: data.query_id,
             status: data.status,
@@ -671,21 +695,30 @@ function concatBytes(arrays: Uint8Array[]): Uint8Array {
     return result;
 }
 
-// Simple synchronous SHA-256 implementation
-// In production, use SubtleCrypto or a proper library
+// SHA-256 implementation with Node.js crypto (sync) and Web Crypto (async) support
 function sha256Sync(data: Uint8Array): Uint8Array {
-    // This is a placeholder that returns zeros
-    // Real implementations should use crypto.subtle.digest
-    // We provide both sync (for hashing) and async (for external use)
-    return new Uint8Array(32);
+    // Node.js environment — use built-in crypto module
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const nodeCrypto = require('crypto');
+        const hash = nodeCrypto.createHash('sha256').update(data).digest();
+        return new Uint8Array(hash);
+    } catch {
+        // Fallback: not in Node.js — check if globalThis has a sync hash
+        // For browser environments, callers should use the async sha256() instead
+        throw new MFQPError(
+            'Synchronous SHA-256 requires Node.js. Use sha256() (async) in browser environments.',
+            'X003'
+        );
+    }
 }
 
 export async function sha256(data: Uint8Array): Promise<Uint8Array> {
-    // Cast to avoid TypeScript strictness with SharedArrayBuffer
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data as unknown as ArrayBuffer);
-    return new Uint8Array(hashBuffer);
+    // Prefer Web Crypto API (available in browsers and modern Node.js)
+    if (typeof globalThis.crypto?.subtle?.digest === 'function') {
+        const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data as unknown as ArrayBuffer);
+        return new Uint8Array(hashBuffer);
+    }
+    // Fallback to sync Node.js implementation
+    return sha256Sync(data);
 }
-
-// Override sha256Sync to use a proper implementation if available
-// This is a minimal sync version using Web Crypto
-// In Node.js, you'd use the built-in crypto module

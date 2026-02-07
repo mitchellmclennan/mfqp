@@ -181,11 +181,13 @@ class ReplayProtector:
     In production, this should be backed by Redis or similar distributed cache.
     """
     
-    def __init__(self, window_seconds: int = 600, max_entries: int = 100000):
+    def __init__(self, window_seconds: int = 600, max_entries: int = 100000, cleanup_interval_seconds: int = 60):
         self._seen: Dict[str, datetime] = {}
         self._lock = threading.Lock()
         self._window = timedelta(seconds=window_seconds)
         self._max_entries = max_entries
+        self._cleanup_interval = cleanup_interval_seconds
+        self._last_cleanup: float = 0.0
     
     def check_and_record(self, query_id: str) -> bool:
         """
@@ -194,10 +196,21 @@ class ReplayProtector:
         Returns:
             True if this is a new query_id, False if replay detected.
         """
+        import time as _time
         now = datetime.now(timezone.utc)
         
         with self._lock:
-            # Prune old entries
+            # Periodic time-based cleanup (even under low traffic)
+            current_time = _time.time()
+            if current_time - self._last_cleanup > self._cleanup_interval:
+                self._last_cleanup = current_time
+                cutoff = now - self._window
+                self._seen = {
+                    k: v for k, v in self._seen.items()
+                    if v > cutoff
+                }
+            
+            # Also prune if exceeding max entries
             if len(self._seen) > self._max_entries:
                 cutoff = now - self._window
                 self._seen = {
@@ -484,6 +497,14 @@ class GhostQuery(MFQPMessage):
             data: Dictionary containing Ghost Query fields
             skip_replay_check: If True, skip replay protection (for testing)
         """
+        # Validate protocol version
+        version = data.get("mfqp_version", MFQP_VERSION)
+        if not version.startswith("1."):
+            raise ValidationError(
+                f"Unsupported MFQP version: {version} (supported: 1.x)",
+                "mfqp_version"
+            )
+        
         timestamp_str = data.get("timestamp", "")
         if timestamp_str.endswith("Z"):
             timestamp_str = timestamp_str[:-1] + "+00:00"

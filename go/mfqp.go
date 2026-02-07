@@ -361,7 +361,11 @@ func (q *GhostQuery) ToCanonicalBytes() ([]byte, error) {
 	buf = append(buf, MessageVersionByte)
 
 	// MFQP version (length-prefixed)
-	buf = append(buf, lengthPrefixString(MFQPVersion)...)
+	versionBytes, err := lengthPrefixString(MFQPVersion)
+	if err != nil {
+		return nil, err
+	}
+	buf = append(buf, versionBytes...)
 
 	// Query ID as UUID bytes
 	queryUUID, err := uuid.Parse(q.QueryID)
@@ -371,11 +375,14 @@ func (q *GhostQuery) ToCanonicalBytes() ([]byte, error) {
 	buf = append(buf, queryUUID[:]...)
 
 	// String fields (length-prefixed)
-	buf = append(buf, lengthPrefixString(q.SourceCompany)...)
-	buf = append(buf, lengthPrefixString(q.TargetCompany)...)
-	buf = append(buf, lengthPrefixString(q.Intent)...)
-	buf = append(buf, lengthPrefixString(q.IntentClass)...)
-	buf = append(buf, lengthPrefixString(string(q.AuthLevel))...)
+	fields := []string{q.SourceCompany, q.TargetCompany, q.Intent, q.IntentClass, string(q.AuthLevel)}
+	for _, field := range fields {
+		fieldBytes, err := lengthPrefixString(field)
+		if err != nil {
+			return nil, err
+		}
+		buf = append(buf, fieldBytes...)
+	}
 
 	// Freshness (big-endian uint32)
 	freshnessBytes := make([]byte, 4)
@@ -414,6 +421,16 @@ func (q *GhostQuery) ToJSON() ([]byte, error) {
 
 // ParseGhostQuery parses a GhostQuery from a map.
 func ParseGhostQuery(data map[string]interface{}, skipReplayCheck bool) (*GhostQuery, error) {
+	// Validate protocol version
+	if v, ok := data["mfqp_version"].(string); ok {
+		if len(v) > 0 && v[0] != '1' {
+			return nil, NewValidationError(
+				fmt.Sprintf("unsupported MFQP version: %s (supported: 1.x)", v),
+				"mfqp_version",
+			)
+		}
+	}
+
 	q := &GhostQuery{}
 
 	if v, ok := data["query_id"].(string); ok {
@@ -438,15 +455,22 @@ func ParseGhostQuery(data map[string]interface{}, skipReplayCheck bool) (*GhostQ
 		q.FreshnessRequiredSeconds = int(v)
 	}
 	if v, ok := data["timestamp"].(string); ok {
-		ts := strings.TrimSuffix(v, "Z")
-		if !strings.Contains(ts, "+") && !strings.Contains(ts[11:], "-") {
-			ts = ts + "+00:00"
+		var parseErr error
+		q.Timestamp, parseErr = time.Parse(time.RFC3339Nano, v)
+		if parseErr != nil {
+			q.Timestamp, parseErr = time.Parse(time.RFC3339, v)
+			if parseErr != nil {
+				// Try with Z suffix replaced
+				normalized := strings.TrimSuffix(v, "Z") + "+00:00"
+				q.Timestamp, parseErr = time.Parse(time.RFC3339, normalized)
+				if parseErr != nil {
+					return nil, NewValidationError(
+						fmt.Sprintf("invalid timestamp format: %s", v),
+						"timestamp",
+					)
+				}
+			}
 		}
-		t, err := time.Parse(time.RFC3339Nano, ts+"Z")
-		if err != nil {
-			t, _ = time.Parse(time.RFC3339, v)
-		}
-		q.Timestamp = t
 	}
 
 	if err := q.Validate(); err != nil {
@@ -460,6 +484,82 @@ func ParseGhostQuery(data map[string]interface{}, skipReplayCheck bool) (*GhostQ
 	}
 
 	return q, nil
+}
+
+// ParseQueryResponse parses a QueryResponse from a map.
+func ParseQueryResponse(data map[string]interface{}) (*QueryResponse, error) {
+	// Validate protocol version
+	if v, ok := data["mfqp_version"].(string); ok {
+		if len(v) > 0 && v[0] != '1' {
+			return nil, NewValidationError(
+				fmt.Sprintf("unsupported MFQP version: %s (supported: 1.x)", v),
+				"mfqp_version",
+			)
+		}
+	}
+
+	r := &QueryResponse{}
+
+	if v, ok := data["query_id"].(string); ok {
+		r.QueryID = v
+	}
+	if v, ok := data["status"].(string); ok {
+		r.Status = ResponseStatus(v)
+	}
+	if v, ok := data["payload"].(map[string]interface{}); ok {
+		r.Payload = v
+	}
+	if v, ok := data["redactions"].([]interface{}); ok {
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				r.Redactions = append(r.Redactions, s)
+			}
+		}
+	}
+	if v, ok := data["results_count"].(float64); ok {
+		r.ResultsCount = int(v)
+	}
+	if v, ok := data["freshness_timestamp"].(string); ok {
+		var parseErr error
+		r.FreshnessTimestamp, parseErr = time.Parse(time.RFC3339Nano, v)
+		if parseErr != nil {
+			r.FreshnessTimestamp, _ = time.Parse(time.RFC3339, v)
+		}
+	}
+	if v, ok := data["timestamp"].(string); ok {
+		var parseErr error
+		r.Timestamp, parseErr = time.Parse(time.RFC3339Nano, v)
+		if parseErr != nil {
+			r.Timestamp, _ = time.Parse(time.RFC3339, v)
+		}
+	}
+
+	// Parse attestation
+	if attData, ok := data["attestation"].(map[string]interface{}); ok {
+		att := &Attestation{}
+		if v, ok := attData["attestation_id"].(string); ok {
+			att.AttestationID = v
+		}
+		if v, ok := attData["response_hash"].(string); ok {
+			att.ResponseHash = v
+		}
+		if v, ok := attData["signer_key_id"].(string); ok {
+			att.SignerKeyID = v
+		}
+		if v, ok := attData["policy_snapshot"].(map[string]interface{}); ok {
+			att.PolicySnapshot = v
+		}
+		if v, ok := attData["signature"].(string); ok {
+			att.Signature, _ = base64.StdEncoding.DecodeString(v)
+		}
+		r.Attestation = att
+	}
+
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
 // =============================================================================
@@ -668,14 +768,18 @@ func ComputeResponseHash(payload map[string]interface{}) (string, error) {
 // HELPER FUNCTIONS
 // =============================================================================
 
-func lengthPrefixString(s string) []byte {
+func lengthPrefixString(s string) ([]byte, error) {
 	encoded := []byte(s)
 	length := len(encoded)
 	if length > 65535 {
-		panic(fmt.Sprintf("string too long for length prefix: %d bytes", length))
+		return nil, NewMessageSizeError(
+			fmt.Sprintf("string too long for length prefix: %d bytes", length),
+			65535,
+			length,
+		)
 	}
 	result := make([]byte, 2+length)
 	binary.BigEndian.PutUint16(result[:2], uint16(length))
 	copy(result[2:], encoded)
-	return result
+	return result, nil
 }
